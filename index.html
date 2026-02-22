@@ -1,26 +1,23 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Web AR Lasertag</title>
-    
-    <!-- Подключаем TensorFlow.js и библиотеку распознавания обьекта Pose Detection -->
+
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
 
     <style>
-        /* --- CSS СТИЛИ --- */
         body {
             margin: 0;
             overflow: hidden;
             background-color: black;
-            font-family: 'Arial', sans-serif;
-            user-select: none; /* Запрет на выделение текста при случайном тапе */
-            touch-action: manipulation; /* Убирает задержку клика на мобильных */
+            font-family: Arial, sans-serif;
+            user-select: none;
+            touch-action: manipulation;
         }
 
-        /* Видео с камеры на весь экран */
         #camera-feed {
             position: absolute;
             top: 0;
@@ -31,7 +28,6 @@
             z-index: 1;
         }
 
-        /* Слой интерфейса поверх видео */
         #ui-layer {
             position: absolute;
             top: 0;
@@ -39,22 +35,34 @@
             width: 100%;
             height: 100%;
             z-index: 2;
-            pointer-events: none; /* Клики проходят сквозь интерфейс */
+            pointer-events: none;
         }
 
-        /* Прицел по центру */
+        #hit-zone {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 120px;
+            height: 120px;
+            transform: translate(-50%, -50%);
+            border: 2px dashed rgba(255, 255, 255, 0.7);
+            border-radius: 50%;
+            box-shadow: 0 0 12px rgba(255, 255, 255, 0.35);
+            z-index: 1;
+        }
+
         #crosshair {
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            color: rgba(255, 50, 50, 0.9);
-            font-size: 50px;
+            color: rgba(255, 50, 50, 0.95);
+            font-size: 52px;
             font-weight: bold;
-            text-shadow: 0 0 5px red;
+            text-shadow: 0 0 8px red;
+            z-index: 2;
         }
 
-        /* Кнопка стрельбы */
         #shoot-btn {
             position: absolute;
             bottom: 40px;
@@ -67,19 +75,17 @@
             color: white;
             border: 3px solid white;
             border-radius: 50px;
-            pointer-events: auto; /* Включаем клики только для кнопки */
+            pointer-events: auto;
             cursor: pointer;
             box-shadow: 0 0 15px rgba(255, 0, 0, 0.8);
             transition: background-color 0.1s;
         }
-        
-        /* Эффект нажатия на кнопку */
+
         #shoot-btn:active {
             background-color: white;
             color: red;
         }
 
-        /* Полоса здоровья */
         #health-bar {
             position: absolute;
             top: 20px;
@@ -92,7 +98,6 @@
             border: 2px solid white;
         }
 
-        /* Статус ИИ (поиск цели) */
         #log {
             position: absolute;
             top: 80px;
@@ -104,7 +109,6 @@
             border-radius: 5px;
         }
 
-        /* Всплывающее сообщение о попадании */
         #hit-message {
             position: absolute;
             top: 35%;
@@ -121,97 +125,159 @@
     </style>
 </head>
 <body>
-
-    <!-- Видео -->
     <video id="camera-feed" autoplay playsinline></video>
-    
-    <!-- UI -->
+
     <div id="ui-layer">
         <div id="health-bar">Здоровье врага: <span id="hp">100</span>%</div>
         <div id="log">Запуск камеры...</div>
-        
-        <!-- Сообщение о попадании -->
         <div id="hit-message">HEADSHOT!</div>
-        
-        <div id="crosshair">✛</div>
+        <div id="hit-zone" aria-hidden="true"></div>
+        <div id="crosshair">+</div>
         <button id="shoot-btn">ОГОНЬ!</button>
     </div>
 
     <script>
-        // --- JAVASCRIPT ЛОГИКА ---
         const video = document.getElementById('camera-feed');
         const shootBtn = document.getElementById('shoot-btn');
         const hpDisplay = document.getElementById('hp');
         const logDisplay = document.getElementById('log');
         const hitMessage = document.getElementById('hit-message');
+        const hitZone = document.getElementById('hit-zone');
 
         let enemyHP = 100;
-        let currentPose = null; // Данные скелета человека
-        let detector = null;    // Сама нейросеть
+        let currentPose = null;
+        let detector = null;
+        const crosshairRadiusPx = 60;
 
-        // 1. Включаем заднюю камеру
+        function updateHitZoneVisual() {
+            const size = crosshairRadiusPx * 2;
+            hitZone.style.width = `${size}px`;
+            hitZone.style.height = `${size}px`;
+        }
+
         async function setupCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment' } // 'environment' - основная (задняя) камера
+                    video: { facingMode: 'environment' }
                 });
                 video.srcObject = stream;
                 return new Promise((resolve) => {
                     video.onloadedmetadata = () => resolve(video);
                 });
             } catch (error) {
-                logDisplay.innerText = "Ошибка: Дайте доступ к камере!";
-                logDisplay.style.color = "red";
+                logDisplay.innerText = 'Ошибка: дайте доступ к камере!';
+                logDisplay.style.color = 'red';
                 console.error(error);
             }
         }
 
-        // 2. Инициализируем ИИ
         async function loadAI() {
-            logDisplay.innerText = "Загрузка ИИ (подождите)...";
+            logDisplay.innerText = 'Загрузка ИИ...';
             try {
-                // Используем "Lightning" версию модели, так как она самая быстрая для телефонов
-                const detectorConfig = { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING };
-                detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet, detectorConfig);
-                logDisplay.innerText = "Оружие готово! Ищите цель.";
-                
-                // Запускаем бесконечный цикл поиска человека в кадре
+                const detectorConfig = {
+                    modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
+                };
+                detector = await poseDetection.createDetector(
+                    poseDetection.SupportedModels.MoveNet,
+                    detectorConfig
+                );
+                logDisplay.innerText = 'Оружие готово! Ищите цель.';
                 detectFrame();
             } catch (error) {
-                logDisplay.innerText = "Ошибка загрузки ИИ.";
+                logDisplay.innerText = 'Ошибка загрузки ИИ.';
+                logDisplay.style.color = 'red';
                 console.error(error);
             }
         }
 
-        // 3. Цикл распознавания кадров
         async function detectFrame() {
             if (detector && video.readyState >= 2) {
                 const poses = await detector.estimatePoses(video);
                 if (poses.length > 0) {
                     currentPose = poses[0];
-                    logDisplay.innerText = "Цель на мушке!";
-                    logDisplay.style.color = "#00ff00";
+                    logDisplay.innerText = 'Цель обнаружена';
+                    logDisplay.style.color = '#00ff00';
                 } else {
                     currentPose = null;
-                    logDisplay.innerText = "Поиск цели...";
-                    logDisplay.style.color = "yellow";
+                    logDisplay.innerText = 'Поиск цели...';
+                    logDisplay.style.color = 'yellow';
                 }
             }
-            // requestAnimationFrame не садит батарею так сильно, как setInterval
             requestAnimationFrame(detectFrame);
         }
 
-        // Функция показа красивого текста при попадании
         function showHitMessage(text, color) {
             hitMessage.innerText = text;
             hitMessage.style.color = color;
             hitMessage.style.opacity = 1;
-            
-            // Прячем текст через 1.2 секунды
             setTimeout(() => {
                 hitMessage.style.opacity = 0;
             }, 1200);
         }
 
-        // 4. Логика стрельбы (нажатие кнопки)
-        shoo
+        function isHeadInCrosshair(head) {
+            if (!head || !video.videoWidth || !video.videoHeight) return false;
+
+            const screenW = window.innerWidth;
+            const screenH = window.innerHeight;
+            const videoW = video.videoWidth;
+            const videoH = video.videoHeight;
+
+            const scale = Math.max(screenW / videoW, screenH / videoH);
+            const renderedW = videoW * scale;
+            const renderedH = videoH * scale;
+            const offsetX = (screenW - renderedW) / 2;
+            const offsetY = (screenH - renderedH) / 2;
+
+            const headScreenX = head.x * scale + offsetX;
+            const headScreenY = head.y * scale + offsetY;
+            const centerX = screenW / 2;
+            const centerY = screenH / 2;
+
+            const dx = headScreenX - centerX;
+            const dy = headScreenY - centerY;
+            const distance = Math.hypot(dx, dy);
+
+            return distance <= crosshairRadiusPx;
+        }
+
+        shootBtn.addEventListener('click', () => {
+            if (!currentPose || !currentPose.keypoints) {
+                showHitMessage('MISS', 'white');
+                return;
+            }
+
+            const head = currentPose.keypoints.find((kp) => kp.name === 'nose');
+            const isPreciseHit = head && (head.score ?? 0) > 0.3 && isHeadInCrosshair(head);
+
+            if (isPreciseHit) {
+                enemyHP = Math.max(0, enemyHP - 20);
+                hpDisplay.innerText = enemyHP;
+                showHitMessage('HEADSHOT!', 'yellow');
+
+                if (enemyHP === 0) {
+                    logDisplay.innerText = 'Цель уничтожена!';
+                    logDisplay.style.color = '#00ffff';
+                    enemyHP = 100;
+                    setTimeout(() => {
+                        hpDisplay.innerText = enemyHP;
+                        logDisplay.innerText = 'Новая цель найдена.';
+                        logDisplay.style.color = '#00ff00';
+                    }, 1200);
+                }
+            } else {
+                showHitMessage('MISS', 'white');
+            }
+        });
+
+        window.addEventListener('resize', updateHitZoneVisual);
+
+        (async function init() {
+            updateHitZoneVisual();
+            const camera = await setupCamera();
+            if (!camera) return;
+            await loadAI();
+        })();
+    </script>
+</body>
+</html>
