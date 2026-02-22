@@ -9,6 +9,11 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
 
     <style>
+        :root {
+            --aim-x: 50%;
+            --aim-y: 34%;
+        }
+
         body {
             margin: 0;
             overflow: hidden;
@@ -40,27 +45,76 @@
 
         #hit-zone {
             position: absolute;
-            top: 50%;
-            left: 50%;
+            top: var(--aim-y);
+            left: var(--aim-x);
             width: 120px;
             height: 120px;
             transform: translate(-50%, -50%);
-            border: 2px dashed rgba(255, 255, 255, 0.7);
+            border: 2px dashed rgba(0, 255, 120, 0.65);
             border-radius: 50%;
-            box-shadow: 0 0 12px rgba(255, 255, 255, 0.35);
+            box-shadow: 0 0 10px rgba(0, 255, 120, 0.35);
             z-index: 1;
         }
 
         #crosshair {
             position: absolute;
-            top: 50%;
-            left: 50%;
+            top: var(--aim-y);
+            left: var(--aim-x);
             transform: translate(-50%, -50%);
-            color: rgba(255, 50, 50, 0.95);
-            font-size: 52px;
-            font-weight: bold;
-            text-shadow: 0 0 8px red;
             z-index: 2;
+            width: 42px;
+            height: 42px;
+        }
+
+        .crosshair-arm {
+            position: absolute;
+            background: #22ff66;
+            box-shadow: 0 0 6px rgba(34, 255, 102, 0.75);
+            border-radius: 2px;
+        }
+
+        .crosshair-arm.top {
+            width: 3px;
+            height: 12px;
+            left: 50%;
+            top: 0;
+            transform: translateX(-50%);
+        }
+
+        .crosshair-arm.bottom {
+            width: 3px;
+            height: 12px;
+            left: 50%;
+            bottom: 0;
+            transform: translateX(-50%);
+        }
+
+        .crosshair-arm.left {
+            width: 12px;
+            height: 3px;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        .crosshair-arm.right {
+            width: 12px;
+            height: 3px;
+            right: 0;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        .crosshair-dot {
+            position: absolute;
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            background: #22ff66;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 5px rgba(34, 255, 102, 0.85);
         }
 
         #shoot-btn {
@@ -132,7 +186,13 @@
         <div id="log">Запуск камеры...</div>
         <div id="hit-message">HEADSHOT!</div>
         <div id="hit-zone" aria-hidden="true"></div>
-        <div id="crosshair">+</div>
+        <div id="crosshair" aria-hidden="true">
+            <span class="crosshair-arm top"></span>
+            <span class="crosshair-arm right"></span>
+            <span class="crosshair-arm bottom"></span>
+            <span class="crosshair-arm left"></span>
+            <span class="crosshair-dot"></span>
+        </div>
         <button id="shoot-btn">ОГОНЬ!</button>
     </div>
 
@@ -147,7 +207,8 @@
         let enemyHP = 100;
         let currentPose = null;
         let detector = null;
-        const crosshairRadiusPx = 60;
+        let audioContext = null;
+        const crosshairRadiusPx = 34;
 
         function updateHitZoneVisual() {
             const size = crosshairRadiusPx * 2;
@@ -215,6 +276,52 @@
             }, 1200);
         }
 
+        function playHitShotSound() {
+            try {
+                if (!audioContext) {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    if (!AudioCtx) return;
+                    audioContext = new AudioCtx();
+                }
+
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+
+                const now = audioContext.currentTime;
+                const gain = audioContext.createGain();
+                const osc = audioContext.createOscillator();
+                const click = audioContext.createBufferSource();
+                const clickBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 0.035, audioContext.sampleRate);
+                const channel = clickBuffer.getChannelData(0);
+
+                for (let i = 0; i < channel.length; i += 1) {
+                    channel[i] = (Math.random() * 2 - 1) * (1 - i / channel.length);
+                }
+
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(170, now);
+                osc.frequency.exponentialRampToValueAtTime(85, now + 0.08);
+
+                gain.gain.setValueAtTime(0.0001, now);
+                gain.gain.exponentialRampToValueAtTime(0.22, now + 0.004);
+                gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+
+                click.buffer = clickBuffer;
+
+                osc.connect(gain);
+                click.connect(gain);
+                gain.connect(audioContext.destination);
+
+                osc.start(now);
+                click.start(now);
+                osc.stop(now + 0.13);
+                click.stop(now + 0.04);
+            } catch (error) {
+                console.error('Audio error:', error);
+            }
+        }
+
         function isHeadInCrosshair(head) {
             if (!head || !video.videoWidth || !video.videoHeight) return false;
 
@@ -231,8 +338,9 @@
 
             const headScreenX = head.x * scale + offsetX;
             const headScreenY = head.y * scale + offsetY;
-            const centerX = screenW / 2;
-            const centerY = screenH / 2;
+            const zoneRect = hitZone.getBoundingClientRect();
+            const centerX = zoneRect.left + zoneRect.width / 2;
+            const centerY = zoneRect.top + zoneRect.height / 2;
 
             const dx = headScreenX - centerX;
             const dy = headScreenY - centerY;
@@ -254,6 +362,7 @@
                 enemyHP = Math.max(0, enemyHP - 20);
                 hpDisplay.innerText = enemyHP;
                 showHitMessage('HEADSHOT!', 'yellow');
+                playHitShotSound();
 
                 if (enemyHP === 0) {
                     logDisplay.innerText = 'Цель уничтожена!';
