@@ -1,392 +1,1488 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Web AR Lasertag</title>
-
+    <title>Lasertag Arena AR</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
-
     <style>
         :root {
             --aim-x: 50%;
-            --aim-y: 34%;
+            --aim-y: 36%;
+            --hud-bg: rgba(5, 12, 20, 0.78);
+            --hud-border: rgba(130, 240, 255, 0.35);
+            --accent: #67f7ff;
+            --danger: #ff5d8f;
+            --warn: #ffd36a;
+            --ok: #7dff9d;
+            --shadow: 0 0 24px rgba(40, 200, 255, 0.18);
+        }
+
+        * {
+            box-sizing: border-box;
         }
 
         body {
             margin: 0;
             overflow: hidden;
-            background-color: black;
-            font-family: Arial, sans-serif;
+            background:
+                radial-gradient(circle at top, rgba(18, 62, 93, 0.6), transparent 30%),
+                radial-gradient(circle at bottom, rgba(80, 13, 35, 0.45), transparent 35%),
+                #010409;
+            color: #fff;
+            font-family: "Segoe UI", Arial, sans-serif;
             user-select: none;
             touch-action: manipulation;
         }
 
-        #camera-feed {
+        button {
+            font: inherit;
+        }
+
+        #camera-feed,
+        #scan-canvas {
             position: absolute;
-            top: 0;
-            left: 0;
+            inset: 0;
             width: 100vw;
             height: 100vh;
             object-fit: cover;
-            z-index: 1;
         }
 
-        #ui-layer {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
+        #camera-feed {
+            z-index: 1;
+            filter: saturate(1.05) contrast(1.05) brightness(0.92);
+        }
+
+        #scan-canvas {
             z-index: 2;
             pointer-events: none;
         }
 
-        #hit-zone {
+        #ui-layer {
             position: absolute;
-            top: var(--aim-y);
-            left: var(--aim-x);
-            width: 120px;
-            height: 120px;
-            transform: translate(-50%, -50%);
-            border: 2px dashed rgba(0, 255, 120, 0.65);
-            border-radius: 50%;
-            box-shadow: 0 0 10px rgba(0, 255, 120, 0.35);
-            z-index: 1;
+            inset: 0;
+            z-index: 3;
+            pointer-events: none;
+        }
+
+        .top-hud,
+        .bottom-hud,
+        .side-panel,
+        .overlay-card {
+            background: var(--hud-bg);
+            border: 1px solid var(--hud-border);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(10px);
+        }
+
+        .top-hud {
+            position: absolute;
+            top: 18px;
+            left: 18px;
+            right: 18px;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            padding: 12px;
+            border-radius: 18px;
+        }
+
+        .hud-block {
+            min-width: 0;
+        }
+
+        .hud-label {
+            color: rgba(210, 240, 255, 0.72);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.16em;
+            margin-bottom: 6px;
+        }
+
+        .hud-value {
+            font-size: 26px;
+            font-weight: 700;
+        }
+
+        .hud-sub {
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 13px;
+            margin-top: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .bar {
+            width: 100%;
+            height: 10px;
+            border-radius: 999px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.08);
+            margin-top: 8px;
+        }
+
+        .bar-fill {
+            height: 100%;
+            width: 100%;
+            border-radius: inherit;
+            transition: width 0.16s ease;
+        }
+
+        #player-health-fill {
+            background: linear-gradient(90deg, #ff5d8f, #ff8a5c);
+        }
+
+        #enemy-charge-fill {
+            background: linear-gradient(90deg, #f5d05d, #ff5d8f);
+        }
+
+        .side-panel {
+            position: absolute;
+            top: 118px;
+            right: 18px;
+            width: min(320px, calc(100vw - 36px));
+            padding: 16px;
+            border-radius: 20px;
+        }
+
+        #objective-title {
+            color: var(--accent);
+            font-size: 24px;
+            margin-bottom: 6px;
+        }
+
+        #objective-copy {
+            color: rgba(255, 255, 255, 0.86);
+            line-height: 1.45;
+            margin-bottom: 14px;
+        }
+
+        .tag-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .tag {
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 999px;
+            padding: 6px 10px;
+            color: rgba(255, 255, 255, 0.82);
+            font-size: 12px;
+            letter-spacing: 0.04em;
+        }
+
+        .bottom-hud {
+            position: absolute;
+            left: 18px;
+            right: 18px;
+            bottom: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border-radius: 20px;
+        }
+
+        .ammo-wrap {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        #ammo-pips {
+            display: flex;
+            gap: 8px;
+        }
+
+        .ammo-pip {
+            width: 16px;
+            height: 28px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            transition: transform 0.12s ease, opacity 0.12s ease;
+        }
+
+        .ammo-pip.live {
+            background: linear-gradient(180deg, #9effcf, #00e5ff);
+            box-shadow: 0 0 12px rgba(95, 246, 255, 0.32);
+        }
+
+        .ammo-pip.spent {
+            opacity: 0.25;
+            transform: scaleY(0.85);
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            pointer-events: auto;
+        }
+
+        .btn {
+            border: none;
+            border-radius: 999px;
+            color: #fff;
+            cursor: pointer;
+            padding: 14px 22px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            transition: transform 0.12s ease, filter 0.12s ease, opacity 0.12s ease;
+        }
+
+        .btn:hover,
+        .btn:focus-visible {
+            filter: brightness(1.08);
+        }
+
+        .btn:active {
+            transform: scale(0.97);
+        }
+
+        .btn:disabled {
+            opacity: 0.45;
+            cursor: default;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #ff5d8f, #ff8a5c);
+            box-shadow: 0 10px 30px rgba(255, 93, 143, 0.3);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #1196c6, #47d6ff);
+            box-shadow: 0 10px 24px rgba(71, 214, 255, 0.2);
+        }
+
+        .btn-ghost {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.14);
         }
 
         #crosshair {
             position: absolute;
             top: var(--aim-y);
             left: var(--aim-x);
+            width: 72px;
+            height: 72px;
             transform: translate(-50%, -50%);
-            z-index: 2;
-            width: 42px;
-            height: 42px;
-        }
-
-        .crosshair-arm {
-            position: absolute;
-            background: #22ff66;
-            box-shadow: 0 0 6px rgba(34, 255, 102, 0.75);
-            border-radius: 2px;
-        }
-
-        .crosshair-arm.top {
-            width: 3px;
-            height: 12px;
-            left: 50%;
-            top: 0;
-            transform: translateX(-50%);
-        }
-
-        .crosshair-arm.bottom {
-            width: 3px;
-            height: 12px;
-            left: 50%;
-            bottom: 0;
-            transform: translateX(-50%);
-        }
-
-        .crosshair-arm.left {
-            width: 12px;
-            height: 3px;
-            left: 0;
-            top: 50%;
-            transform: translateY(-50%);
-        }
-
-        .crosshair-arm.right {
-            width: 12px;
-            height: 3px;
-            right: 0;
-            top: 50%;
-            transform: translateY(-50%);
-        }
-
-        .crosshair-dot {
-            position: absolute;
-            width: 3px;
-            height: 3px;
             border-radius: 50%;
-            background: #22ff66;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
-            box-shadow: 0 0 5px rgba(34, 255, 102, 0.85);
+            border: 1px solid rgba(103, 247, 255, 0.7);
+            box-shadow:
+                0 0 22px rgba(103, 247, 255, 0.32),
+                inset 0 0 16px rgba(103, 247, 255, 0.14);
         }
 
-        #shoot-btn {
+        #crosshair::before,
+        #crosshair::after,
+        .crosshair-line {
+            content: "";
             position: absolute;
-            bottom: 40px;
+            background: rgba(103, 247, 255, 0.95);
+            box-shadow: 0 0 8px rgba(103, 247, 255, 0.7);
+        }
+
+        #crosshair::before {
+            width: 2px;
+            height: 22px;
+            left: 50%;
+            top: -10px;
+            transform: translateX(-50%);
+        }
+
+        #crosshair::after {
+            width: 2px;
+            height: 22px;
+            left: 50%;
+            bottom: -10px;
+            transform: translateX(-50%);
+        }
+
+        .crosshair-line.left,
+        .crosshair-line.right {
+            width: 22px;
+            height: 2px;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        .crosshair-line.left {
+            left: -10px;
+        }
+
+        .crosshair-line.right {
+            right: -10px;
+        }
+
+        .crosshair-core {
+            position: absolute;
+            inset: 50% auto auto 50%;
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: #fff;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 12px rgba(255, 255, 255, 0.9);
+        }
+
+        #reticle-ring {
+            position: absolute;
+            top: var(--aim-y);
+            left: var(--aim-x);
+            width: 150px;
+            height: 150px;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            border: 2px dashed rgba(103, 247, 255, 0.25);
+            transition: border-color 0.16s ease, transform 0.16s ease;
+        }
+
+        .reticle-hot {
+            border-color: rgba(255, 211, 106, 0.85) !important;
+            transform: translate(-50%, -50%) scale(1.04) !important;
+        }
+
+        #flash,
+        #hit-message,
+        #countdown,
+        #reload-banner {
+            position: absolute;
             left: 50%;
             transform: translateX(-50%);
-            padding: 20px 50px;
-            font-size: 24px;
-            font-weight: bold;
-            background-color: rgba(255, 0, 0, 0.7);
-            color: white;
-            border: 3px solid white;
-            border-radius: 50px;
-            pointer-events: auto;
-            cursor: pointer;
-            box-shadow: 0 0 15px rgba(255, 0, 0, 0.8);
-            transition: background-color 0.1s;
+            text-align: center;
+            pointer-events: none;
         }
 
-        #shoot-btn:active {
-            background-color: white;
-            color: red;
-        }
-
-        #health-bar {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            color: white;
-            font-size: 22px;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 10px 15px;
-            border-radius: 10px;
-            border: 2px solid white;
-        }
-
-        #log {
-            position: absolute;
-            top: 80px;
-            left: 20px;
-            color: #00ff00;
-            font-size: 16px;
-            background: rgba(0, 0, 0, 0.6);
-            padding: 5px 10px;
-            border-radius: 5px;
+        #flash {
+            inset: 0;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.38), transparent 40%);
+            opacity: 0;
+            transition: opacity 0.15s ease;
         }
 
         #hit-message {
-            position: absolute;
-            top: 35%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            color: yellow;
-            font-size: 40px;
-            font-weight: bold;
-            text-align: center;
-            text-shadow: 2px 2px 10px black, 0 0 20px red;
+            top: 30%;
+            font-size: clamp(34px, 7vw, 78px);
+            font-weight: 900;
+            letter-spacing: 0.08em;
+            text-shadow: 0 0 18px rgba(0, 0, 0, 0.85), 0 0 38px currentColor;
             opacity: 0;
-            transition: opacity 0.2s;
+            transition: opacity 0.18s ease, transform 0.18s ease;
+        }
+
+        #countdown,
+        #reload-banner {
+            top: 50%;
+            font-size: clamp(28px, 7vw, 88px);
+            font-weight: 900;
+            opacity: 0;
+            text-shadow: 0 0 18px rgba(0, 0, 0, 0.8);
+        }
+
+        #reload-banner {
+            top: 62%;
+            color: var(--warn);
+            font-size: clamp(18px, 3.6vw, 34px);
+        }
+
+        #mission-feed {
+            position: absolute;
+            left: 18px;
+            bottom: 102px;
+            width: min(380px, calc(100vw - 36px));
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .feed-entry {
+            padding: 10px 12px;
+            border-radius: 14px;
+            background: rgba(2, 8, 14, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.88);
+            font-size: 13px;
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
+        }
+
+        .overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 4;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(1, 5, 10, 0.46);
+        }
+
+        .overlay.hidden,
+        .hud-hidden {
+            display: none !important;
+        }
+
+        .overlay-card {
+            width: min(760px, 100%);
+            padding: clamp(22px, 4vw, 36px);
+            border-radius: 28px;
+            background: linear-gradient(180deg, rgba(7, 15, 26, 0.94), rgba(9, 20, 34, 0.9));
+        }
+
+        .eyebrow {
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.24em;
+            font-size: 12px;
+            margin-bottom: 12px;
+        }
+
+        h1 {
+            margin: 0 0 12px;
+            font-size: clamp(34px, 7vw, 70px);
+            line-height: 0.98;
+        }
+
+        .lead {
+            margin: 0 0 18px;
+            color: rgba(255, 255, 255, 0.84);
+            font-size: clamp(16px, 2.4vw, 20px);
+            line-height: 1.5;
+            max-width: 58ch;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 14px;
+            margin: 24px 0;
+        }
+
+        .feature {
+            padding: 16px;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .feature strong {
+            display: block;
+            margin-bottom: 6px;
+            color: #fff;
+        }
+
+        .feature span {
+            color: rgba(255, 255, 255, 0.72);
+            line-height: 1.45;
+            font-size: 14px;
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            pointer-events: auto;
+        }
+
+        .footer-note {
+            margin-top: 16px;
+            color: rgba(255, 255, 255, 0.65);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+            margin: 22px 0;
+        }
+
+        .stat-card {
+            padding: 16px;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: 800;
+            margin-top: 6px;
+        }
+
+        @media (max-width: 920px) {
+            .top-hud {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .side-panel {
+                top: auto;
+                bottom: 140px;
+                left: 18px;
+                right: 18px;
+                width: auto;
+            }
+
+            #mission-feed {
+                display: none;
+            }
+
+            .bottom-hud {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .controls {
+                justify-content: space-between;
+            }
+        }
+
+        @media (max-width: 620px) {
+            .top-hud {
+                top: 10px;
+                left: 10px;
+                right: 10px;
+                gap: 8px;
+                padding: 10px;
+            }
+
+            .bottom-hud {
+                left: 10px;
+                right: 10px;
+                bottom: 10px;
+            }
+
+            .side-panel {
+                left: 10px;
+                right: 10px;
+                bottom: 132px;
+            }
+
+            .hud-value {
+                font-size: 21px;
+            }
+
+            .btn {
+                padding: 12px 16px;
+            }
+
+            #crosshair {
+                width: 64px;
+                height: 64px;
+            }
+
+            #reticle-ring {
+                width: 128px;
+                height: 128px;
+            }
         }
     </style>
 </head>
 <body>
-    <video id="camera-feed" autoplay playsinline></video>
-
+    <video id="camera-feed" autoplay playsinline muted></video>
+    <canvas id="scan-canvas"></canvas>
     <div id="ui-layer">
-        <div id="health-bar">Здоровье врага: <span id="hp">100</span>%</div>
-        <div id="log">Запуск камеры...</div>
-        <div id="hit-message">HEADSHOT!</div>
-        <div id="hit-zone" aria-hidden="true"></div>
+        <div id="flash"></div>
+        <div id="reticle-ring" aria-hidden="true"></div>
         <div id="crosshair" aria-hidden="true">
-            <span class="crosshair-arm top"></span>
-            <span class="crosshair-arm right"></span>
-            <span class="crosshair-arm bottom"></span>
-            <span class="crosshair-arm left"></span>
-            <span class="crosshair-dot"></span>
+            <span class="crosshair-line left"></span>
+            <span class="crosshair-line right"></span>
+            <span class="crosshair-core"></span>
         </div>
-        <button id="shoot-btn">ОГОНЬ!</button>
+        <section id="hud" class="hud-hidden">
+            <div class="top-hud">
+                <div class="hud-block">
+                    <div class="hud-label">Статус агента</div>
+                    <div class="hud-value" id="player-health-label">100%</div>
+                    <div class="bar"><div id="player-health-fill" class="bar-fill"></div></div>
+                    <div class="hud-sub" id="player-health-copy">Броня в норме</div>
+                </div>
+                <div class="hud-block">
+                    <div class="hud-label">Счёт</div>
+                    <div class="hud-value" id="score-label">0</div>
+                    <div class="hud-sub" id="combo-label">Комбо x1</div>
+                </div>
+                <div class="hud-block">
+                    <div class="hud-label">Волна</div>
+                    <div class="hud-value" id="wave-label">1</div>
+                    <div class="hud-sub" id="kills-label">Ликвидации: 0</div>
+                </div>
+                <div class="hud-block">
+                    <div class="hud-label">Таймер</div>
+                    <div class="hud-value" id="timer-label">01:30</div>
+                    <div class="hud-sub" id="mode-label">Режим: Штурм</div>
+                </div>
+            </div>
+            <aside class="side-panel">
+                <div class="hud-label">Текущая цель</div>
+                <div id="objective-title">Загрузка...</div>
+                <div id="objective-copy">Подготовка цели.</div>
+                <div class="bar"><div id="enemy-charge-fill" class="bar-fill"></div></div>
+                <div class="hud-sub" id="enemy-charge-copy">Заряд атаки: 0%</div>
+                <div class="tag-row" id="objective-tags"></div>
+            </aside>
+            <div id="mission-feed"></div>
+            <div class="bottom-hud">
+                <div class="ammo-wrap">
+                    <div>
+                        <div class="hud-label">Энергоблок</div>
+                        <div class="hud-sub" id="ammo-label">Патроны: 8 / 8</div>
+                    </div>
+                    <div id="ammo-pips"></div>
+                </div>
+                <div class="controls">
+                    <button id="pause-btn" class="btn btn-ghost">Пауза</button>
+                    <button id="reload-btn" class="btn btn-secondary">Перезарядка</button>
+                    <button id="shoot-btn" class="btn btn-primary">Огонь</button>
+                </div>
+            </div>
+        </section>
+        <div id="hit-message">HEADSHOT</div>
+        <div id="countdown">3</div>
+        <div id="reload-banner">Перезарядка...</div>
+        <div id="menu-overlay" class="overlay">
+            <div class="overlay-card">
+                <div class="eyebrow">AR Combat Prototype</div>
+                <h1>Lasertag Arena</h1>
+                <p class="lead">Теперь это полноценная AR-аркада: волны целей, разные классы врагов, здоровье игрока, очки, комбо, таймер матча и ответные атаки.</p>
+                <div class="grid">
+                    <div class="feature"><strong>Штурм</strong><span>90 секунд, растущая сложность и финальный результат.</span></div>
+                    <div class="feature"><strong>Тело как карта</strong><span>Попадания по голове, корпусу и плечам через pose detection.</span></div>
+                    <div class="feature"><strong>Тактика</strong><span>Следи за зарядом врага, экономь боезапас и не теряй комбо.</span></div>
+                </div>
+                <div class="actions">
+                    <button id="start-game-btn" class="btn btn-primary">Начать штурм</button>
+                    <button id="start-training-btn" class="btn btn-secondary">Тренировка</button>
+                </div>
+                <div class="footer-note">Лучше всего работает, если в кадре есть человек по пояс. Разреши доступ к камере и держи цель в зоне прицела.</div>
+            </div>
+        </div>
+        <div id="pause-overlay" class="overlay hidden">
+            <div class="overlay-card">
+                <div class="eyebrow">Пауза</div>
+                <h1>Операция заморожена</h1>
+                <p class="lead">Можно поправить кадр, перевести дыхание и продолжить бой в любой момент.</p>
+                <div class="actions">
+                    <button id="resume-btn" class="btn btn-primary">Продолжить</button>
+                    <button id="restart-btn" class="btn btn-secondary">Заново</button>
+                    <button id="back-to-menu-btn" class="btn btn-ghost">В меню</button>
+                </div>
+            </div>
+        </div>
+        <div id="gameover-overlay" class="overlay hidden">
+            <div class="overlay-card">
+                <div class="eyebrow">Финальный отчёт</div>
+                <h1 id="gameover-title">Операция завершена</h1>
+                <p class="lead" id="gameover-copy">Подводим итоги матча.</p>
+                <div class="stats-grid">
+                    <div class="stat-card"><div class="hud-label">Счёт</div><div class="value" id="final-score">0</div></div>
+                    <div class="stat-card"><div class="hud-label">Ликвидации</div><div class="value" id="final-kills">0</div></div>
+                    <div class="stat-card"><div class="hud-label">Точность</div><div class="value" id="final-accuracy">0%</div></div>
+                    <div class="stat-card"><div class="hud-label">Лучшее комбо</div><div class="value" id="final-combo">x1</div></div>
+                </div>
+                <div class="actions">
+                    <button id="play-again-btn" class="btn btn-primary">Ещё матч</button>
+                    <button id="gameover-menu-btn" class="btn btn-ghost">В меню</button>
+                </div>
+            </div>
+        </div>
     </div>
-
     <script>
-        const video = document.getElementById('camera-feed');
-        const shootBtn = document.getElementById('shoot-btn');
-        const hpDisplay = document.getElementById('hp');
-        const logDisplay = document.getElementById('log');
-        const hitMessage = document.getElementById('hit-message');
-        const hitZone = document.getElementById('hit-zone');
+        const $ = (id) => document.getElementById(id);
+        const video = $('camera-feed');
+        const canvas = $('scan-canvas');
+        const ctx = canvas.getContext('2d');
 
-        let enemyHP = 100;
-        let currentPose = null;
-        let detector = null;
-        let audioContext = null;
-        const crosshairRadiusPx = 34;
+        const CROSSHAIR_RADIUS = 34;
+        const MAX_AMMO = 8;
+        const FEED_LIMIT = 5;
 
-        function updateHitZoneVisual() {
-            const size = crosshairRadiusPx * 2;
-            hitZone.style.width = `${size}px`;
-            hitZone.style.height = `${size}px`;
-        }
+        const ui = {
+            hud: $('hud'),
+            menu: $('menu-overlay'),
+            pause: $('pause-overlay'),
+            gameover: $('gameover-overlay'),
+            hitMessage: $('hit-message'),
+            countdown: $('countdown'),
+            reloadBanner: $('reload-banner'),
+            flash: $('flash'),
+            reticleRing: $('reticle-ring'),
+            missionFeed: $('mission-feed'),
+            playerHealthLabel: $('player-health-label'),
+            playerHealthFill: $('player-health-fill'),
+            playerHealthCopy: $('player-health-copy'),
+            scoreLabel: $('score-label'),
+            comboLabel: $('combo-label'),
+            waveLabel: $('wave-label'),
+            killsLabel: $('kills-label'),
+            timerLabel: $('timer-label'),
+            modeLabel: $('mode-label'),
+            objectiveTitle: $('objective-title'),
+            objectiveCopy: $('objective-copy'),
+            enemyChargeFill: $('enemy-charge-fill'),
+            enemyChargeCopy: $('enemy-charge-copy'),
+            objectiveTags: $('objective-tags'),
+            ammoLabel: $('ammo-label'),
+            ammoPips: $('ammo-pips'),
+            gameoverTitle: $('gameover-title'),
+            gameoverCopy: $('gameover-copy'),
+            finalScore: $('final-score'),
+            finalKills: $('final-kills'),
+            finalAccuracy: $('final-accuracy'),
+            finalCombo: $('final-combo')
+        };
 
-        async function setupCamera() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment' }
-                });
-                video.srcObject = stream;
-                return new Promise((resolve) => {
-                    video.onloadedmetadata = () => resolve(video);
-                });
-            } catch (error) {
-                logDisplay.innerText = 'Ошибка: дайте доступ к камере!';
-                logDisplay.style.color = 'red';
-                console.error(error);
+        const targetProfiles = [
+            {
+                id: 'headhunter',
+                name: 'Снайпер "Ворон"',
+                objective: 'Только голова. Медленный, но бьёт больно.',
+                zone: 'head',
+                maxHp: 40,
+                hitsRequired: 2,
+                chargeRate: 0.16,
+                attackDamage: 18,
+                score: 130,
+                tags: ['Голова', 'Элита', 'Угроза высокая'],
+                rewardText: 'Чистый headshot.'
+            },
+            {
+                id: 'breaker',
+                name: 'Штурмовик "Брейкер"',
+                objective: 'Центр корпуса. Держит удар, заряжается быстро.',
+                zone: 'chest',
+                maxHp: 60,
+                hitsRequired: 3,
+                chargeRate: 0.23,
+                attackDamage: 12,
+                score: 110,
+                tags: ['Корпус', 'Быстрый', 'Давление'],
+                rewardText: 'Броня пробита.'
+            },
+            {
+                id: 'phantom',
+                name: 'Диверсант "Фантом"',
+                objective: 'Левое плечо. Один точный выстрел.',
+                zone: 'leftShoulder',
+                maxHp: 35,
+                hitsRequired: 1,
+                chargeRate: 0.19,
+                attackDamage: 15,
+                score: 150,
+                tags: ['Плечо', 'Точный выстрел', 'Редкий'],
+                rewardText: 'Точка вскрыта.'
+            },
+            {
+                id: 'sentinel',
+                name: 'Страж "Сентинел"',
+                objective: 'Сначала правое плечо, потом голова.',
+                zone: 'sequence',
+                sequence: ['rightShoulder', 'head'],
+                maxHp: 55,
+                hitsRequired: 2,
+                chargeRate: 0.17,
+                attackDamage: 16,
+                score: 170,
+                tags: ['Комбо-цель', 'Плечо + голова', 'Тактика'],
+                rewardText: 'Сентинел выведен из строя.'
             }
+        ];
+
+        const state = {
+            gameState: 'menu',
+            mode: 'assault',
+            playerHealth: 100,
+            ammo: MAX_AMMO,
+            score: 0,
+            kills: 0,
+            shots: 0,
+            hits: 0,
+            combo: 1,
+            comboTimer: 0,
+            bestCombo: 1,
+            wave: 1,
+            matchTime: 90,
+            enemy: null,
+            currentPose: null,
+            detector: null,
+            audioContext: null,
+            lastFrameTime: 0,
+            detectBusy: false,
+            reloading: false,
+            reloadEndsAt: 0,
+            countdownHandle: 0,
+            feed: [],
+            training: false
+        };
+
+        function setCanvasSize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
         }
 
-        async function loadAI() {
-            logDisplay.innerText = 'Загрузка ИИ...';
-            try {
-                const detectorConfig = {
-                    modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
-                };
-                detector = await poseDetection.createDetector(
-                    poseDetection.SupportedModels.MoveNet,
-                    detectorConfig
-                );
-                logDisplay.innerText = 'Оружие готово! Ищите цель.';
-                detectFrame();
-            } catch (error) {
-                logDisplay.innerText = 'Ошибка загрузки ИИ.';
-                logDisplay.style.color = 'red';
-                console.error(error);
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        function formatTime(totalSeconds) {
+            const safe = Math.max(0, Math.ceil(totalSeconds));
+            return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`;
+        }
+
+        function addFeed(text) {
+            state.feed.unshift(text);
+            state.feed = state.feed.slice(0, FEED_LIMIT);
+            ui.missionFeed.innerHTML = state.feed.map((entry) => `<div class="feed-entry">${entry}</div>`).join('');
+        }
+
+        function avg(points) {
+            const valid = points.filter(Boolean);
+            if (!valid.length) return null;
+            const total = valid.reduce((acc, point) => ({
+                x: acc.x + point.x,
+                y: acc.y + point.y,
+                score: acc.score + (point.score ?? 0)
+            }), { x: 0, y: 0, score: 0 });
+
+            return {
+                x: total.x / valid.length,
+                y: total.y / valid.length,
+                score: total.score / valid.length
+            };
+        }
+
+        function kp(name) {
+            return state.currentPose?.keypoints?.find((point) => point.name === name) ?? null;
+        }
+
+        function zonePoint(zone) {
+            const nose = kp('nose');
+            const leftEye = kp('left_eye');
+            const rightEye = kp('right_eye');
+            const leftShoulder = kp('left_shoulder');
+            const rightShoulder = kp('right_shoulder');
+            const leftHip = kp('left_hip');
+            const rightHip = kp('right_hip');
+
+            if (zone === 'head') return avg([nose, leftEye, rightEye]);
+            if (zone === 'leftShoulder') return leftShoulder;
+            if (zone === 'rightShoulder') return rightShoulder;
+            if (zone === 'chest') {
+                const shoulders = avg([leftShoulder, rightShoulder]);
+                const hips = avg([leftHip, rightHip]);
+                if (shoulders && hips) {
+                    return {
+                        x: (shoulders.x + hips.x) / 2,
+                        y: shoulders.y + (hips.y - shoulders.y) * 0.3,
+                        score: Math.min(shoulders.score ?? 0, hips.score ?? 0)
+                    };
+                }
+                return shoulders;
             }
+
+            return null;
         }
 
-        async function detectFrame() {
-            if (detector && video.readyState >= 2) {
-                const poses = await detector.estimatePoses(video);
-                if (poses.length > 0) {
-                    currentPose = poses[0];
-                    logDisplay.innerText = 'Цель обнаружена';
-                    logDisplay.style.color = '#00ff00';
-                } else {
-                    currentPose = null;
-                    logDisplay.innerText = 'Поиск цели...';
-                    logDisplay.style.color = 'yellow';
-                }
-            }
-            requestAnimationFrame(detectFrame);
+        function currentZoneName() {
+            if (!state.enemy) return 'head';
+            if (state.enemy.zone !== 'sequence') return state.enemy.zone;
+            return state.enemy.sequence[state.enemy.phase] ?? state.enemy.sequence[state.enemy.sequence.length - 1];
         }
 
-        function showHitMessage(text, color) {
-            hitMessage.innerText = text;
-            hitMessage.style.color = color;
-            hitMessage.style.opacity = 1;
-            setTimeout(() => {
-                hitMessage.style.opacity = 0;
-            }, 1200);
+        function currentEnemyPoint() {
+            return zonePoint(currentZoneName());
         }
 
-        function playHitShotSound() {
-            try {
-                if (!audioContext) {
-                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-                    if (!AudioCtx) return;
-                    audioContext = new AudioCtx();
-                }
-
-                if (audioContext.state === 'suspended') {
-                    audioContext.resume();
-                }
-
-                const now = audioContext.currentTime;
-                const gain = audioContext.createGain();
-                const osc = audioContext.createOscillator();
-                const click = audioContext.createBufferSource();
-                const clickBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 0.035, audioContext.sampleRate);
-                const channel = clickBuffer.getChannelData(0);
-
-                for (let i = 0; i < channel.length; i += 1) {
-                    channel[i] = (Math.random() * 2 - 1) * (1 - i / channel.length);
-                }
-
-                osc.type = 'triangle';
-                osc.frequency.setValueAtTime(170, now);
-                osc.frequency.exponentialRampToValueAtTime(85, now + 0.08);
-
-                gain.gain.setValueAtTime(0.0001, now);
-                gain.gain.exponentialRampToValueAtTime(0.22, now + 0.004);
-                gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
-
-                click.buffer = clickBuffer;
-
-                osc.connect(gain);
-                click.connect(gain);
-                gain.connect(audioContext.destination);
-
-                osc.start(now);
-                click.start(now);
-                osc.stop(now + 0.13);
-                click.stop(now + 0.04);
-            } catch (error) {
-                console.error('Audio error:', error);
-            }
-        }
-
-        function isHeadInCrosshair(head) {
-            if (!head || !video.videoWidth || !video.videoHeight) return false;
+        function videoToScreen(point) {
+            if (!point || !video.videoWidth || !video.videoHeight) return null;
 
             const screenW = window.innerWidth;
             const screenH = window.innerHeight;
             const videoW = video.videoWidth;
             const videoH = video.videoHeight;
-
             const scale = Math.max(screenW / videoW, screenH / videoH);
             const renderedW = videoW * scale;
             const renderedH = videoH * scale;
             const offsetX = (screenW - renderedW) / 2;
             const offsetY = (screenH - renderedH) / 2;
 
-            const headScreenX = head.x * scale + offsetX;
-            const headScreenY = head.y * scale + offsetY;
-            const zoneRect = hitZone.getBoundingClientRect();
-            const centerX = zoneRect.left + zoneRect.width / 2;
-            const centerY = zoneRect.top + zoneRect.height / 2;
-
-            const dx = headScreenX - centerX;
-            const dy = headScreenY - centerY;
-            const distance = Math.hypot(dx, dy);
-
-            return distance <= crosshairRadiusPx;
+            return {
+                x: point.x * scale + offsetX,
+                y: point.y * scale + offsetY,
+                score: point.score ?? 0
+            };
         }
 
-        shootBtn.addEventListener('click', () => {
-            if (!currentPose || !currentPose.keypoints) {
-                showHitMessage('MISS', 'white');
+        function crosshairCenter() {
+            const rect = ui.reticleRing.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        }
+
+        function isPointInCrosshair(point) {
+            const screenPoint = videoToScreen(point);
+            if (!screenPoint || (screenPoint.score ?? 0) < 0.25) return false;
+            const center = crosshairCenter();
+            return Math.hypot(screenPoint.x - center.x, screenPoint.y - center.y) <= CROSSHAIR_RADIUS;
+        }
+
+        function chooseProfile() {
+            const pool = [...targetProfiles];
+            return state.wave < 3
+                ? pool[Math.floor(Math.random() * 3)]
+                : pool[Math.floor(Math.random() * pool.length)];
+        }
+
+        function spawnEnemy() {
+            const profile = chooseProfile();
+            state.enemy = { ...profile, hp: profile.maxHp, charge: 0, phase: 0 };
+            updateObjectivePanel();
+            addFeed(`Новая цель: ${state.enemy.name}.`);
+        }
+
+        function updateWave() {
+            state.wave = 1 + Math.floor(state.kills / 3);
+        }
+
+        function playerHealthStatus() {
+            if (state.playerHealth > 65) return 'Броня в норме';
+            if (state.playerHealth > 30) return 'Щиты проседают';
+            return 'Критический уровень';
+        }
+
+        function updateAmmoDisplay() {
+            ui.ammoLabel.textContent = `Патроны: ${state.ammo} / ${MAX_AMMO}`;
+            ui.ammoPips.innerHTML = '';
+
+            for (let i = 0; i < MAX_AMMO; i += 1) {
+                const pip = document.createElement('span');
+                pip.className = `ammo-pip ${i < state.ammo ? 'live' : 'spent'}`;
+                ui.ammoPips.appendChild(pip);
+            }
+        }
+
+        function updateObjectivePanel() {
+            if (!state.enemy) {
+                ui.objectiveTitle.textContent = 'Нет цели';
+                ui.objectiveCopy.textContent = 'Ожидание новой волны.';
+                ui.enemyChargeFill.style.width = '0%';
+                ui.enemyChargeCopy.textContent = 'Заряд атаки: 0%';
+                ui.objectiveTags.innerHTML = '';
                 return;
             }
 
-            const head = currentPose.keypoints.find((kp) => kp.name === 'nose');
-            const isPreciseHit = head && (head.score ?? 0) > 0.3 && isHeadInCrosshair(head);
+            const zoneMap = {
+                head: 'Голова',
+                chest: 'Корпус',
+                leftShoulder: 'Левое плечо',
+                rightShoulder: 'Правое плечо'
+            };
 
-            if (isPreciseHit) {
-                enemyHP = Math.max(0, enemyHP - 20);
-                hpDisplay.innerText = enemyHP;
-                showHitMessage('HEADSHOT!', 'yellow');
-                playHitShotSound();
+            ui.objectiveTitle.textContent = state.enemy.name;
+            ui.objectiveCopy.textContent = state.enemy.objective;
+            ui.enemyChargeFill.style.width = `${clamp(state.enemy.charge * 100, 0, 100)}%`;
+            ui.enemyChargeCopy.textContent = `Заряд атаки: ${Math.round(state.enemy.charge * 100)}%`;
+            ui.objectiveTags.innerHTML = [...state.enemy.tags, `Активная зона: ${zoneMap[currentZoneName()] ?? currentZoneName()}`]
+                .map((tag) => `<span class="tag">${tag}</span>`)
+                .join('');
+        }
 
-                if (enemyHP === 0) {
-                    logDisplay.innerText = 'Цель уничтожена!';
-                    logDisplay.style.color = '#00ffff';
-                    enemyHP = 100;
-                    setTimeout(() => {
-                        hpDisplay.innerText = enemyHP;
-                        logDisplay.innerText = 'Новая цель найдена.';
-                        logDisplay.style.color = '#00ff00';
-                    }, 1200);
+        function updateHud() {
+            ui.playerHealthLabel.textContent = `${Math.max(0, Math.round(state.playerHealth))}%`;
+            ui.playerHealthFill.style.width = `${clamp(state.playerHealth, 0, 100)}%`;
+            ui.playerHealthCopy.textContent = playerHealthStatus();
+            ui.scoreLabel.textContent = String(state.score);
+            ui.comboLabel.textContent = `Комбо x${state.combo}`;
+            ui.waveLabel.textContent = String(state.wave);
+            ui.killsLabel.textContent = `Ликвидации: ${state.kills}`;
+            ui.timerLabel.textContent = state.training ? '∞' : formatTime(state.matchTime);
+            ui.modeLabel.textContent = `Режим: ${state.training ? 'Тренировка' : 'Штурм'}`;
+            updateAmmoDisplay();
+            updateObjectivePanel();
+        }
+
+        function resetState(mode) {
+            state.gameState = 'countdown';
+            state.mode = mode;
+            state.training = mode === 'training';
+            state.playerHealth = 100;
+            state.ammo = MAX_AMMO;
+            state.score = 0;
+            state.kills = 0;
+            state.shots = 0;
+            state.hits = 0;
+            state.combo = 1;
+            state.comboTimer = 0;
+            state.bestCombo = 1;
+            state.wave = 1;
+            state.matchTime = state.training ? 9999 : 90;
+            state.enemy = null;
+            state.reloading = false;
+            state.reloadEndsAt = 0;
+            state.feed = [];
+            clearTimeout(state.countdownHandle);
+            $('reload-btn').disabled = false;
+            addFeed('Система готовит бой.');
+            spawnEnemy();
+            updateHud();
+        }
+
+        function showOverlay(node) {
+            [ui.menu, ui.pause, ui.gameover].forEach((item) => item.classList.add('hidden'));
+            if (node) node.classList.remove('hidden');
+        }
+
+        function showBanner(node, text, duration = 850) {
+            node.textContent = text;
+            node.style.opacity = '1';
+            setTimeout(() => {
+                node.style.opacity = '0';
+            }, duration);
+        }
+
+        function showHitMessage(text, color) {
+            ui.hitMessage.textContent = text;
+            ui.hitMessage.style.color = color;
+            ui.hitMessage.style.opacity = '1';
+            ui.hitMessage.style.transform = 'translateX(-50%) scale(1.04)';
+            setTimeout(() => {
+                ui.hitMessage.style.opacity = '0';
+                ui.hitMessage.style.transform = 'translateX(-50%) scale(1)';
+            }, 700);
+        }
+
+        function pulseFlash() {
+            ui.flash.style.opacity = '1';
+            setTimeout(() => {
+                ui.flash.style.opacity = '0';
+            }, 90);
+        }
+
+        function ensureAudio() {
+            try {
+                if (!state.audioContext) {
+                    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    if (!AudioCtx) return null;
+                    state.audioContext = new AudioCtx();
                 }
-            } else {
-                showHitMessage('MISS', 'white');
+
+                if (state.audioContext.state === 'suspended') {
+                    state.audioContext.resume();
+                }
+
+                return state.audioContext;
+            } catch (error) {
+                console.error('Audio init failed', error);
+                return null;
             }
-        });
+        }
 
-        window.addEventListener('resize', updateHitZoneVisual);
+        function playTone({ type = 'triangle', start = 240, end = 120, duration = 0.12, volume = 0.18 }) {
+            const audio = ensureAudio();
+            if (!audio) return;
 
-        (async function init() {
-            updateHitZoneVisual();
-            const camera = await setupCamera();
-            if (!camera) return;
+            const osc = audio.createOscillator();
+            const gain = audio.createGain();
+            const now = audio.currentTime;
+
+            osc.type = type;
+            osc.frequency.setValueAtTime(start, now);
+            osc.frequency.exponentialRampToValueAtTime(Math.max(1, end), now + duration);
+            gain.gain.setValueAtTime(0.0001, now);
+            gain.gain.exponentialRampToValueAtTime(volume, now + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+            osc.connect(gain);
+            gain.connect(audio.destination);
+            osc.start(now);
+            osc.stop(now + duration + 0.01);
+        }
+
+        const playShotSound = () => playTone({ type: 'sawtooth', start: 240, end: 80, duration: 0.09, volume: 0.16 });
+        const playReloadSound = () => playTone({ type: 'triangle', start: 220, end: 320, duration: 0.12, volume: 0.1 });
+        const playHitSound = () => playTone({ type: 'square', start: 520, end: 260, duration: 0.08, volume: 0.08 });
+        const playDamageSound = () => playTone({ type: 'sine', start: 150, end: 70, duration: 0.18, volume: 0.14 });
+        const playEmptySound = () => playTone({ type: 'square', start: 220, end: 180, duration: 0.05, volume: 0.05 });
+
+        function renderScanOverlay() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (!state.currentPose || !state.currentPose.keypoints) {
+                ui.reticleRing.classList.remove('reticle-hot');
+                return;
+            }
+
+            const activePoint = currentEnemyPoint();
+            const activeScreenPoint = videoToScreen(activePoint);
+
+            for (const point of state.currentPose.keypoints) {
+                const screenPoint = videoToScreen(point);
+                if (!screenPoint || (screenPoint.score ?? 0) < 0.2) continue;
+
+                ctx.beginPath();
+                ctx.fillStyle = 'rgba(103, 247, 255, 0.35)';
+                ctx.arc(screenPoint.x, screenPoint.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            if (activeScreenPoint && (activeScreenPoint.score ?? 0) > 0.25) {
+                ctx.beginPath();
+                ctx.strokeStyle = isPointInCrosshair(activePoint) ? '#ffd36a' : '#67f7ff';
+                ctx.lineWidth = 3;
+                ctx.arc(activeScreenPoint.x, activeScreenPoint.y, 22, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(activeScreenPoint.x - 34, activeScreenPoint.y);
+                ctx.lineTo(activeScreenPoint.x + 34, activeScreenPoint.y);
+                ctx.moveTo(activeScreenPoint.x, activeScreenPoint.y - 34);
+                ctx.lineTo(activeScreenPoint.x, activeScreenPoint.y + 34);
+                ctx.stroke();
+            }
+
+            ui.reticleRing.classList.toggle('reticle-hot', Boolean(activePoint && isPointInCrosshair(activePoint)));
+        }
+
+        function loseCombo() {
+            state.combo = 1;
+            state.comboTimer = 0;
+        }
+
+        function applyHit() {
+            if (!state.enemy) return;
+
+            state.hits += 1;
+            state.combo += 1;
+            state.bestCombo = Math.max(state.bestCombo, state.combo);
+            state.comboTimer = 2.4;
+
+            const damage = Math.round(state.enemy.maxHp / state.enemy.hitsRequired);
+            state.enemy.hp = Math.max(0, state.enemy.hp - damage);
+            state.enemy.charge = Math.max(0, state.enemy.charge - 0.2);
+            playHitSound();
+
+            if (state.enemy.zone === 'sequence') {
+                state.enemy.phase += 1;
+                if (state.enemy.phase < state.enemy.sequence.length) {
+                    showHitMessage('PHASE CLEAR', '#67f7ff');
+                    addFeed(`Цель ${state.enemy.name}: следующая точка открыта.`);
+                    updateHud();
+                    return;
+                }
+            }
+
+            if (state.enemy.hp <= 0 || state.enemy.phase >= state.enemy.hitsRequired) {
+                const comboBonus = Math.max(0, (state.combo - 1) * 10);
+                const healthBonus = Math.round(state.playerHealth * 0.4);
+                state.score += state.enemy.score + comboBonus + healthBonus;
+                state.kills += 1;
+                updateWave();
+                addFeed(`${state.enemy.name} устранён. +${state.enemy.score + comboBonus + healthBonus} очков.`);
+                showHitMessage('TARGET DOWN', '#7dff9d');
+                spawnEnemy();
+            } else {
+                state.score += 25 * state.combo;
+                showHitMessage(state.enemy.rewardText.toUpperCase(), '#ffd36a');
+            }
+
+            updateHud();
+        }
+
+        function shoot() {
+            if (state.gameState !== 'playing' || state.reloading) return;
+
+            if (state.ammo <= 0) {
+                playEmptySound();
+                showBanner(ui.reloadBanner, 'Нет заряда', 600);
+                return;
+            }
+
+            state.ammo -= 1;
+            state.shots += 1;
+            playShotSound();
+            pulseFlash();
+
+            const activePoint = currentEnemyPoint();
+            if (activePoint && isPointInCrosshair(activePoint)) {
+                applyHit();
+            } else {
+                showHitMessage('MISS', '#fff');
+                loseCombo();
+                addFeed('Промах. Комбо сброшено.');
+                updateHud();
+            }
+
+            updateAmmoDisplay();
+        }
+
+        function startReload() {
+            if (state.reloading || state.ammo === MAX_AMMO || state.gameState !== 'playing') return;
+
+            state.reloading = true;
+            state.reloadEndsAt = performance.now() + 1400;
+            $('reload-btn').disabled = true;
+            playReloadSound();
+            showBanner(ui.reloadBanner, 'Перезарядка...', 1400);
+            addFeed('Энергоблок заменяется.');
+        }
+
+        function finishReload() {
+            state.reloading = false;
+            state.ammo = MAX_AMMO;
+            $('reload-btn').disabled = false;
+            updateAmmoDisplay();
+            addFeed('Боезапас восстановлен.');
+        }
+
+        function applyEnemyAttack() {
+            if (!state.enemy) return;
+
+            state.enemy.charge = 0;
+            state.playerHealth = Math.max(0, state.playerHealth - state.enemy.attackDamage);
+            loseCombo();
+            playDamageSound();
+            showHitMessage('UNDER FIRE', '#ff5d8f');
+            addFeed(`${state.enemy.name} атакует. -${state.enemy.attackDamage}% брони.`);
+            updateHud();
+
+            if (state.playerHealth <= 0) {
+                endGame(false);
+            }
+        }
+
+        function stepEnemy(delta) {
+            if (!state.enemy) return;
+
+            const point = currentEnemyPoint();
+            const visible = Boolean(point && (point.score ?? 0) > 0.25);
+            const rate = state.enemy.chargeRate + (state.wave - 1) * 0.01;
+
+            state.enemy.charge = clamp(state.enemy.charge + (visible ? delta * rate : -delta * 0.1), 0, 1);
+            if (state.enemy.charge >= 1) {
+                applyEnemyAttack();
+            }
+        }
+
+        function setGameState(nextState) {
+            state.gameState = nextState;
+            ui.hud.classList.toggle('hud-hidden', !(nextState === 'playing' || nextState === 'paused'));
+        }
+
+        function openPause() {
+            if (state.gameState !== 'playing') return;
+            setGameState('paused');
+            showOverlay(ui.pause);
+        }
+
+        function resumeGame() {
+            if (state.gameState !== 'paused') return;
+            setGameState('playing');
+            showOverlay(null);
+        }
+
+        function openMenu() {
+            setGameState('menu');
+            showOverlay(ui.menu);
+            ui.hud.classList.add('hud-hidden');
+        }
+
+        function endGame(success) {
+            setGameState('gameover');
+            showOverlay(ui.gameover);
+
+            const accuracy = state.shots ? Math.round((state.hits / state.shots) * 100) : 0;
+            ui.gameoverTitle.textContent = success ? 'Штурм завершён' : 'Агент выведен из строя';
+            ui.gameoverCopy.textContent = success
+                ? 'Время вышло. Ты удержал арену и собрал финальный счёт.'
+                : 'Цели продавили оборону. Можно сразу перезапустить матч.';
+            ui.finalScore.textContent = String(state.score);
+            ui.finalKills.textContent = String(state.kills);
+            ui.finalAccuracy.textContent = `${accuracy}%`;
+            ui.finalCombo.textContent = `x${state.bestCombo}`;
+        }
+
+        function finishMatchIfNeeded() {
+            if (!state.training && state.matchTime <= 0) {
+                endGame(true);
+            }
+        }
+
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: false,
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+
+                video.srcObject = stream;
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        video.play().then(() => resolve(video)).catch(() => resolve(video));
+                    };
+                });
+            } catch (error) {
+                addFeed('Нет доступа к камере. Разреши её в браузере и обнови страницу.');
+                console.error(error);
+                return null;
+            }
+        }
+
+        async function loadAI() {
+            try {
+                state.detector = await poseDetection.createDetector(
+                    poseDetection.SupportedModels.MoveNet,
+                    { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+                );
+                addFeed('Система трекинга активна.');
+            } catch (error) {
+                addFeed('Не удалось загрузить pose detection.');
+                console.error(error);
+            }
+        }
+
+        async function detectFrame() {
+            if (state.detectBusy || !state.detector || video.readyState < 2) return;
+            state.detectBusy = true;
+
+            try {
+                const poses = await state.detector.estimatePoses(video, {
+                    maxPoses: 1,
+                    flipHorizontal: false
+                });
+                state.currentPose = poses[0] ?? null;
+            } catch (error) {
+                console.error('Pose detection failed', error);
+            } finally {
+                state.detectBusy = false;
+            }
+        }
+
+        function detectionLoop() {
+            detectFrame();
+            window.setTimeout(detectionLoop, 110);
+        }
+
+        function runCountdown(callback) {
+            const values = ['3', '2', '1', 'СТАРТ'];
+            let index = 0;
+            ui.countdown.style.opacity = '1';
+
+            const tick = () => {
+                ui.countdown.textContent = values[index];
+                ui.countdown.style.opacity = '1';
+                setTimeout(() => {
+                    ui.countdown.style.opacity = '0';
+                }, 700);
+
+                index += 1;
+                if (index < values.length) {
+                    state.countdownHandle = setTimeout(tick, 800);
+                } else {
+                    state.countdownHandle = setTimeout(() => {
+                        ui.countdown.style.opacity = '0';
+                        callback();
+                    }, 800);
+                }
+            };
+
+            tick();
+        }
+
+        function startMode(mode) {
+            resetState(mode);
+            showOverlay(null);
+            ui.hud.classList.remove('hud-hidden');
+            runCountdown(() => {
+                setGameState('playing');
+                addFeed(mode === 'training' ? 'Режим тренировки активирован.' : 'Штурм начался.');
+            });
+        }
+
+        function gameLoop(timestamp) {
+            const delta = state.lastFrameTime ? (timestamp - state.lastFrameTime) / 1000 : 0;
+            state.lastFrameTime = timestamp;
+
+            if (state.gameState === 'playing') {
+                if (state.reloading && timestamp >= state.reloadEndsAt) {
+                    finishReload();
+                }
+
+                state.comboTimer = Math.max(0, state.comboTimer - delta);
+                if (state.comboTimer === 0 && state.combo > 1) {
+                    loseCombo();
+                }
+
+                if (!state.training) {
+                    state.matchTime = Math.max(0, state.matchTime - delta);
+                    finishMatchIfNeeded();
+                }
+
+                stepEnemy(delta);
+                updateHud();
+            }
+
+            renderScanOverlay();
+            window.requestAnimationFrame(gameLoop);
+        }
+
+        function bindControls() {
+            $('start-game-btn').addEventListener('click', () => startMode('assault'));
+            $('start-training-btn').addEventListener('click', () => startMode('training'));
+            $('restart-btn').addEventListener('click', () => startMode(state.mode));
+            $('play-again-btn').addEventListener('click', () => startMode(state.mode));
+            $('back-to-menu-btn').addEventListener('click', openMenu);
+            $('gameover-menu-btn').addEventListener('click', openMenu);
+            $('resume-btn').addEventListener('click', resumeGame);
+            $('shoot-btn').addEventListener('click', shoot);
+            $('reload-btn').addEventListener('click', startReload);
+            $('pause-btn').addEventListener('click', () => {
+                if (state.gameState === 'paused') {
+                    resumeGame();
+                } else {
+                    openPause();
+                }
+            });
+
+            window.addEventListener('keydown', (event) => {
+                if (event.code === 'Space') {
+                    event.preventDefault();
+                    shoot();
+                }
+                if (event.code === 'KeyR') {
+                    event.preventDefault();
+                    startReload();
+                }
+                if (event.code === 'Escape') {
+                    if (state.gameState === 'playing') openPause();
+                    else if (state.gameState === 'paused') resumeGame();
+                }
+            });
+
+            window.addEventListener('resize', () => {
+                setCanvasSize();
+                renderScanOverlay();
+            });
+        }
+
+        async function init() {
+            setCanvasSize();
+            bindControls();
+            updateHud();
+            addFeed('Инициализация арены...');
+            await setupCamera();
             await loadAI();
-        })();
+            detectionLoop();
+            window.requestAnimationFrame(gameLoop);
+        }
+
+        init();
     </script>
 </body>
 </html>
